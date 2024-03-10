@@ -1,0 +1,538 @@
+from dotenv import load_dotenv
+import json
+from typing import List
+import os
+from datetime import datetime
+from urllib.parse import urlencode
+import requests
+import uuid
+from bs4 import BeautifulSoup, NavigableString
+from urllib.parse import urljoin
+import re 
+import chromadb
+from langchain.text_splitter import CharacterTextSplitter
+from chromadb.config import Settings
+from chromadb.utils import embedding_functions
+from dataclasses import dataclass
+import psycopg2
+from psycopg2 import Error
+import time
+from slugify import slugify
+
+@dataclass
+class News:
+    headline: str
+    content: str
+    link: str
+    image_url: str
+    source: str
+    category: str 
+    slug: str 
+    published_date: datetime = datetime.now() 
+
+def remove_empty_tags(parent_tag):
+    if parent_tag.attrs and 'class' in parent_tag.attrs:
+        del parent_tag['class']
+
+    empty_tags = parent_tag.find_all(lambda tag: tag.name != 'br' and not tag.contents and (not tag.string or not tag.string.strip()))
+
+    for empty_tag in empty_tags:
+        empty_tag.extract()
+
+def remove_unwanted_attributes(tag):
+    if tag is not None and not isinstance(tag, NavigableString):
+        # Remove all attributes except href
+        if tag.attrs:
+            for attribute in list(tag.attrs):
+                if attribute not in ['href']:
+                    del tag[attribute]
+        
+        # Remove All attributes from child tags
+        for child in tag.find_all():
+            if child.attrs:
+                for attribute in list(child.attrs):
+                    if attribute not in ['href']:
+                        del child[attribute]
+
+def remove_whitespace(tag):
+    # # If the tag has no child tags, and it contains only text, clean the text content
+    # if tag is not None and tag.find_all():
+    #     print("Tag: ", tag)
+    #     print("Tag string: ", tag.string)
+    #     if tag.children:
+    #         for child in tag.children:
+    #             print("Child from tag.children:", child)
+    #             print("Child string from tag.children:", child.string)
+    #             print("\n\n")
+    #     for child in tag.find_all():
+    #         print('Child from tag.find_all: ', child)
+
+    print('Before cleaning: ', tag)
+    if tag is not None:
+        if tag.string:
+            cleaned_text = tag.string.strip()
+            tag.string.replace_with(cleaned_text)
+        elif tag.children:
+            children = list(tag.children)
+            sizeOfChildren = len(children)
+            index = 0
+            for child in tag.children:  
+                if child.string and index == 0:
+                    cleaned_text = child.string.lstrip()
+                    child.string.replace_with(cleaned_text)
+                elif child.string and index == sizeOfChildren - 1:
+                    cleaned_text = child.string.rstrip()
+                    child.string.replace_with(cleaned_text)
+                index += 1
+
+    print('After cleaning: ', tag)
+
+def get_scrapeops_url(url):
+    SCRAPE_OPS_API_KEY = os.getenv('SCRAPE_OPS_API_KEY')
+    payload = {'api_key': SCRAPE_OPS_API_KEY, 'url': url}
+    proxy_url = 'https://proxy.scrapeops.io/v1/?' + urlencode(payload)
+    return proxy_url
+
+def request_page(url):
+    # Send a GET request to the URL
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.84 Safari/537.36',
+        'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
+    }
+    response = requests.get(url=get_scrapeops_url(url),headers=headers)
+    if response.status_code == 200:
+        # Parse the HTML content of the page
+        soup = BeautifulSoup(response.text, 'html.parser')
+        return soup
+    else:
+        print(f"Failed to retrieve the page. Status code: {response.status_code}")
+        return None
+
+def scrape_from_investing_website(url):
+    soup = request_page(url)
+
+    news: List[News] = list()
+    unique_links = set()
+
+    if soup == None:
+        return news
+
+    links = soup.find_all('a', href=lambda href: href and href.startswith('/news/economy/') and '#' not in href)
+
+    if not links:
+        return news
+    
+    for link in links:
+        if 'href' in link.attrs and len(unique_links) < 5:
+            href_value = link['href']
+            full_link = urljoin(url, href_value)  # Convert relative link to absolute link
+            unique_links.add(full_link)
+
+    # Scraping content of each linked page
+    for linked_page in unique_links:
+        print(f"\nScraping content from: {linked_page}")
+
+        linked_page_soup = request_page(linked_page)
+
+        if linked_page_soup == None:
+            print('Linked Page Not Found')
+            continue
+        
+        # Find the script tag with type="application/ld+json"
+        script_tag = linked_page_soup.find('script', type='application/ld+json')
+
+        if not script_tag:
+            print("Script Tag Not Found")
+            continue
+        
+        # Extract the content of the script tag
+        script_content = script_tag.string.strip()
+
+        # Parse the script content
+        script_data = json.loads(script_content)
+
+        headline = script_data.get('headline')
+        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S%z') 
+        author_name = script_data.get('author').get('name')
+        thumbnail_url = script_data.get('image').get('url')
+        category= script_data.get('articleSection')
+
+        print('Headline: ', headline)
+        print("Date Published: ", date_published)
+        print("Author Name: ", author_name)
+        print("Thumbnail URL: ", thumbnail_url)
+
+
+        articlePageContent = linked_page_soup.find('div', {'class': 'articlePage'})
+
+        if not articlePageContent:
+            print("Article content Not Found")
+            continue 
+
+        elements_with_tags = articlePageContent.find_all(lambda tag: tag.name == 'p' and (tag.find_parent('div') and 'articlePage' in tag.find_parent('div').get('class', [])))
+
+        if not elements_with_tags:
+            print("Article content Not Found")
+            continue
+
+        # Fix href url
+        for paragraph in elements_with_tags:
+            # Find all <a> tags within the paragraph
+            links = paragraph.find_all('a')
+            # Iterate through each <a> tag
+            for link in links:
+                # Check if href attribute is present and starts with '/'
+                if 'href' in link.attrs and link['href'].startswith('/'):
+                    # Modify the href attribute to include the full path
+                    link['href'] = urljoin('https://www.investing.com',link['href'])
+        
+        # Apply the remove_unwanted_attributes function to all tags
+        for element_with_tag in elements_with_tags:
+            if element_with_tag is not None:
+                remove_unwanted_attributes(element_with_tag)
+                remove_empty_tags(element_with_tag)
+                remove_whitespace(element_with_tag)
+
+        news_content = '\n'.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+
+        print('Content with tag:', news_content)
+        
+        # Remove all tags from the soup
+        news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+
+        print("\nContent without tag:", news_content)
+        print("\n\n\n")
+
+        news.append(News(
+            headline=headline,
+            content=news_content,
+            link=linked_page,
+            image_url=thumbnail_url,
+            published_date=date_published,
+            source='investing',
+            slug=slugify(headline),
+            category=category
+        ))
+
+    return news
+
+def scrape_from_cnbc_website(url):
+    soup = request_page(url)
+
+    news: List[News] = list()
+    unique_links = set()
+
+    if soup == None:
+        return news
+
+    target_div = soup.find('div', {'id': 'SectionWithNativeTVE-ThreeUpStack-6'})
+    if not target_div:
+        print('Initial Content for title and href not Found')
+        return news
+
+    pattern = re.compile(r'https://www\.cnbc\.com/\d{4}/\d{2}/\d{2}')
+
+    links = target_div.find_all('a', href=lambda href: href and pattern.match(href))
+
+    for link in links:
+        if 'href' in link.attrs and len(unique_links) < 5:
+            href_value = link['href']
+            full_link = urljoin(url, href_value)  # Convert relative link to absolute link
+            unique_links.add(full_link)
+
+    # Scraping content of each linked page
+    for linked_page in unique_links:
+        print(f"\nScraping content from: {linked_page}")
+
+        linked_page_soup = request_page(linked_page)
+
+        if linked_page_soup == None:
+            continue
+
+        # Find the script tag with type="application/ld+json"
+        script_tag = linked_page_soup.find('script', type='application/ld+json')
+
+        if not script_tag:
+            print("Script Tag Not Found")
+            continue
+        
+        # Extract the content of the script tag
+        script_content = script_tag.string.strip()
+
+        # Parse the script content
+        script_data = json.loads(script_content)
+
+        headline = script_data.get('headline')
+        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S%z') 
+        author_name = script_data.get('author')[0].get('name')
+        thumbnail_url = script_data.get('thumbnailUrl')
+        category= script_data.get('articleSection')
+
+        print('Headline: ', headline)
+        print("Date Published: ", date_published)
+        print("Author Name: ", author_name)
+        print("Thumbnail URL: ", thumbnail_url)
+
+        articlePageContent = linked_page_soup.find('div', {'class': 'ArticleBody-articleBody'})
+
+        if not articlePageContent:
+            print("Article content Not Found")
+            continue 
+        
+        elements_with_tags = articlePageContent.find_all(lambda tag: (tag.name == 'p' and (tag.find_parent('div') and 'group' in tag.find_parent('div').get('class', []))) or (tag.name == 'h2' and 'ArticleBody-subtitle' in tag.get('class',[])))
+        
+        if not elements_with_tags:
+            print("Article content Not Found")
+            continue
+
+        # Fix href url
+        for paragraph in elements_with_tags:
+            # Find all <a> tags within the paragraph
+            links = paragraph.find_all('a')
+            # Iterate through each <a> tag
+            for link in links:
+                # Check if href attribute is present and starts with '/'
+                if 'href' in link.attrs and link['href'].startswith('/'):
+                    # Modify the href attribute to include the full path
+                    link['href'] = urljoin('https://www.cnbc.com/',link['href'])
+        
+        # Apply the remove_unwanted_attributes function to all tags 
+        for element_with_tag in elements_with_tags:
+            if element_with_tag is not None:
+                remove_unwanted_attributes(element_with_tag)
+                remove_empty_tags(element_with_tag)
+                remove_whitespace(element_with_tag)
+
+        news_content = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != '' and 'CNBC PRO' not in paragraph.get_text(strip=True).strip()])
+
+        print('Content with tag:', news_content)
+        
+        # Remove all tags from the soup
+        news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != '' and 'CNBC PRO' not in paragraph.get_text(strip=True).strip()])
+
+        print("\nContent without tag:", news_content)
+        print("\n\n\n")
+        
+        news.append(News(
+            headline=headline,
+            content=news_content,
+            link=linked_page,
+            image_url=thumbnail_url,
+            published_date=date_published,
+            source='cnbc',
+            slug=slugify(headline),
+            category=category
+        ))
+
+    return news
+
+def scrape_from_cnn_website(url):
+    soup = request_page(url)
+
+    news: List[News] = list()
+    unique_links = set()
+
+    if soup == None:
+        return news
+
+    
+    target_div = soup.find_all('div', {'data-open-link': lambda x: x and x.endswith("/index.html")})
+
+    if not target_div:
+        print('Initial Content for title and href not Found')
+        return news
+    
+    links = [div['data-open-link'] for div in target_div]
+    
+    for link in links:
+        if len(unique_links) < 5:
+            full_link = urljoin('https://edition.cnn.com', link)  # Convert relative link to absolute link
+            unique_links.add(full_link)
+
+    # Scraping content of each linked page
+    for linked_page in unique_links:
+        print(f"\nScraping content from: {linked_page}")
+
+        linked_page_soup = request_page(linked_page)
+
+        if linked_page_soup == None:
+            continue
+        
+        # Find the script tag with type="application/ld+json"
+        script_tag = linked_page_soup.find('script', type='application/ld+json')
+
+        if not script_tag:
+            print("Script Tag Not Found")
+            continue
+        
+        # Extract the content of the script tag
+        script_content = script_tag.string.strip()
+
+        # Parse the script content
+        script_data = json.loads(script_content)
+
+        headline = script_data.get('headline')
+        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%fZ') 
+        author_name = script_data.get('author')[0].get('name')
+        thumbnail_url = script_data.get('thumbnailUrl')
+        category= script_data.get('articleSection')[0]
+
+        print('Headline: ', headline)
+        print("Date Published: ", date_published)
+        print("Author Name: ", author_name)
+        print("Thumbnail URL: ", thumbnail_url)
+
+        elements_with_tags = linked_page_soup.find_all('p', class_='paragraph inline-placeholder')
+
+        if not elements_with_tags:
+            print("Article content Not Found")
+            continue
+
+        # Apply the remove_unwanted_attributes function to all tags 
+        for element_with_tag in elements_with_tags:
+            if element_with_tag is not None:
+                remove_unwanted_attributes(element_with_tag)
+                remove_empty_tags(element_with_tag)
+                remove_whitespace(element_with_tag)
+
+        news_content = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+
+        print('Content with tag:', news_content)
+        
+        # Remove all tags from the soup
+        news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+
+        print("\nContent without tag:", news_content)
+        print("\n\n\n")
+
+        news.append(News(
+            headline=headline,
+            content=news_content,
+            link=linked_page,
+            image_url=thumbnail_url,
+            published_date=date_published,
+            source='cnn',
+            slug=slugify(headline),
+            category=category
+        ))
+
+    return news
+
+def store_news_in_chroma(news: List[News]):
+    startTime = time.time()
+    global chroma_client
+    print("Connecting to ChromaDB...")
+    chroma_client = chromadb.HttpClient(
+        host="localhost", port = 8000, settings=Settings(allow_reset=True, anonymized_telemetry=False))
+    
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=OPENAI_API_KEY,
+        model_name="text-embedding-3-small"
+    )
+
+    collection = chroma_client.get_or_create_collection(name="news_collection", embedding_function=open_ai_embedding)
+
+    # split it into chunks
+    text_splitter = CharacterTextSplitter(
+        separator = " ",
+        chunk_size = 1000,
+        chunk_overlap  = 200,
+        length_function = len,
+        is_separator_regex = False,
+    )
+
+    for _, article in enumerate(news):
+        metadatas = [{ 'source': article.source, 'slug': article.slug, 'date': article.published_date.strftime('%Y-%m-%d %H:%M:%S'), 'headline' : article.headline}]
+        documents = text_splitter.create_documents([article.content],metadatas=metadatas)
+
+        exist = collection.query(
+            query_texts=[documents[0].page_content],
+            n_results=1,
+            where={"slug": article.slug},
+        )
+        
+        if len(exist['ids'][0]) > 0:
+            print("Document already exist")
+            continue
+        
+        for doc in documents:
+            collection.add(
+                ids=[str(uuid.uuid1())], metadatas=doc.metadata, documents=doc.page_content
+            )
+    print('Records inserted successfully into ChromaDB')
+    endTime = time.time()
+    print(f"Time taken to insert records: {endTime - startTime} seconds")
+
+
+def store_news_in_postgres(news: List[News]):
+    try:
+        print("Connecting to PostgreSQL...")
+        startTime = time.time()
+        connection = psycopg2.connect(
+            user=os.getenv('DB_USERNAME'),
+            password=os.getenv('DB_PASSWORD'),
+            host=os.getenv('DB_HOST'),
+            port=os.getenv('DB_PORT'),
+            database=os.getenv('DB_NAME')
+        )
+        
+        cursor = connection.cursor()
+
+        insert_query = """INSERT INTO news (headline, content, scraped_from, thumbnail_url, source, category_name, slug, published_date) 
+                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        
+        records_to_insert = [(news_obj.headline, news_obj.content, news_obj.link, news_obj.image_url, news_obj.source, news_obj.category, news_obj.slug, news_obj.published_date) for news_obj in news]
+
+        cursor.executemany(insert_query, records_to_insert)
+        connection.commit()
+        print("Records inserted successfully into news table")
+
+        endTime = time.time()
+        print(f"Time taken to insert records: {endTime - startTime} seconds")
+
+    except (Exception, Error) as error:
+        print("Error while inserting data into PostgreSQL:", error)
+
+    finally:
+        if connection:
+            cursor.close()
+
+def scrape_website():
+    url_investing_website = 'https://www.investing.com/news/economy'
+    newsInvesting = scrape_from_investing_website(url_investing_website)
+
+    url_cnbc_website = 'https://www.cnbc.com/economy/'
+    newsCnbc = scrape_from_cnbc_website(url_cnbc_website)
+
+    url_cnn_website = 'https://edition.cnn.com/business/economy'
+    newsCnn = scrape_from_cnn_website(url_cnn_website)
+
+    all_news = newsInvesting + newsCnbc + newsCnn
+    store_news_in_chroma(all_news) 
+    store_news_in_postgres(all_news)
+
+def check_chromadb(reset=False):
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
+        api_key=OPENAI_API_KEY,
+        model_name="text-embedding-3-small"
+    )
+    chroma_client = chromadb.HttpClient(
+        host="localhost", port = 8000, settings=Settings(allow_reset=True, anonymized_telemetry=False))
+    
+    if reset:
+        chroma_client.reset()
+
+    collection = chroma_client.get_or_create_collection(name="news_collection", embedding_function=open_ai_embedding)
+    print('collection peek: ',collection.peek()) # returns a list of the first 10 items in the collection
+    print('collection count: ',collection.count())
+
+def main():
+    load_dotenv()
+    scrape_website()
+    # check_chromadb(True)
+
+if __name__=="__main__": 
+    main() 
+    
