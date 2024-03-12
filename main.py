@@ -55,18 +55,6 @@ def remove_unwanted_attributes(tag):
                         del child[attribute]
 
 def remove_whitespace(tag):
-    # # If the tag has no child tags, and it contains only text, clean the text content
-    # if tag is not None and tag.find_all():
-    #     print("Tag: ", tag)
-    #     print("Tag string: ", tag.string)
-    #     if tag.children:
-    #         for child in tag.children:
-    #             print("Child from tag.children:", child)
-    #             print("Child string from tag.children:", child.string)
-    #             print("\n\n")
-    #     for child in tag.find_all():
-    #         print('Child from tag.find_all: ', child)
-
     print('Before cleaning: ', tag)
     if tag is not None:
         if tag.string:
@@ -422,8 +410,10 @@ def store_news_in_chroma(news: List[News]):
     startTime = time.time()
     global chroma_client
     print("Connecting to ChromaDB...")
+    CHROMA_HOST = os.getenv('CHROMA_HOST')
+    CHROMA_PORT = os.getenv('CHROMA_PORT')
     chroma_client = chromadb.HttpClient(
-        host="localhost", port = 8000, settings=Settings(allow_reset=True, anonymized_telemetry=False))
+        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=True, anonymized_telemetry=False))
     
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
     open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
@@ -479,6 +469,13 @@ def store_news_in_postgres(news: List[News]):
         
         cursor = connection.cursor()
 
+        # Retrieve all existing slugs from the database
+        cursor.execute("SELECT slug FROM news")
+        existing_slugs = {row[0] for row in cursor.fetchall()}
+
+        # Remove news with existing slugs
+        news = [news_obj for news_obj in news if news_obj.slug not in existing_slugs]
+
         insert_query = """INSERT INTO news (headline, content, scraped_from, thumbnail_url, source, category_name, slug, published_date) 
                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
         
@@ -518,8 +515,10 @@ def check_chromadb(reset=False):
         api_key=OPENAI_API_KEY,
         model_name="text-embedding-3-small"
     )
+    CHROMA_HOST = os.getenv('CHROMA_HOST')
+    CHROMA_PORT = os.getenv('CHROMA_PORT')
     chroma_client = chromadb.HttpClient(
-        host="localhost", port = 8000, settings=Settings(allow_reset=True, anonymized_telemetry=False))
+        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=True, anonymized_telemetry=False))
     
     if reset:
         chroma_client.reset()
