@@ -18,17 +18,19 @@ import psycopg2
 from psycopg2 import Error
 import time
 from slugify import slugify
-
+import html
 @dataclass
 class News:
     headline: str
-    content: str
-    link: str
-    image_url: str
-    source: str
-    category: str 
     slug: str 
-    published_date: datetime = datetime.now() 
+    content: str
+    content_html: str
+    source: str
+    source_url: str
+    image_url: str
+    category: str 
+    author: str
+    published_date: datetime
 
 def remove_empty_tags(parent_tag):
     if parent_tag.attrs and 'class' in parent_tag.attrs:
@@ -55,7 +57,6 @@ def remove_unwanted_attributes(tag):
                         del child[attribute]
 
 def remove_whitespace(tag):
-    print('Before cleaning: ', tag)
     if tag is not None:
         if tag.string:
             cleaned_text = tag.string.strip()
@@ -72,8 +73,6 @@ def remove_whitespace(tag):
                     cleaned_text = child.string.rstrip()
                     child.string.replace_with(cleaned_text)
                 index += 1
-
-    print('After cleaning: ', tag)
 
 def get_scrapeops_url(url):
     SCRAPE_OPS_API_KEY = os.getenv('SCRAPE_OPS_API_KEY')
@@ -140,8 +139,9 @@ def scrape_from_investing_website(url):
         script_data = json.loads(script_content)
 
         headline = script_data.get('headline')
-        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S%z') 
-        author_name = script_data.get('author').get('name')
+        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%f%z') 
+        
+        author_name = script_data.get('author').get('name') 
         thumbnail_url = script_data.get('image').get('url')
         category= script_data.get('articleSection')
 
@@ -150,14 +150,13 @@ def scrape_from_investing_website(url):
         print("Author Name: ", author_name)
         print("Thumbnail URL: ", thumbnail_url)
 
-
-        articlePageContent = linked_page_soup.find('div', {'class': 'articlePage'})
+        articlePageContent = linked_page_soup.find('div', {'class': 'article_articlePage__UMz3q'})
 
         if not articlePageContent:
             print("Article content Not Found")
             continue 
 
-        elements_with_tags = articlePageContent.find_all(lambda tag: tag.name == 'p' and (tag.find_parent('div') and 'articlePage' in tag.find_parent('div').get('class', [])))
+        elements_with_tags = articlePageContent.find_all(lambda tag: tag.name == 'p' and (tag.find_parent('div') and 'article_articlePage__UMz3q' in tag.find_parent('div').get('class', [])))
 
         if not elements_with_tags:
             print("Article content Not Found")
@@ -181,9 +180,9 @@ def scrape_from_investing_website(url):
                 remove_empty_tags(element_with_tag)
                 remove_whitespace(element_with_tag)
 
-        news_content = '\n'.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+        news_content_tag = '\n'.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
 
-        print('Content with tag:', news_content)
+        print('Content with tag:', news_content_tag)
         
         # Remove all tags from the soup
         news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
@@ -193,13 +192,15 @@ def scrape_from_investing_website(url):
 
         news.append(News(
             headline=headline,
-            content=news_content,
-            link=linked_page,
-            image_url=thumbnail_url,
-            published_date=date_published,
-            source='investing',
             slug=slugify(headline),
-            category=category
+            content=news_content,
+            content_html=html.escape(news_content_tag),
+            source='investing',
+            source_url=linked_page,
+            image_url=thumbnail_url,
+            category=category,
+            author=author_name,
+            published_date=date_published
         ))
 
     return news
@@ -252,7 +253,10 @@ def scrape_from_cnbc_website(url):
 
         headline = script_data.get('headline')
         date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S%z') 
-        author_name = script_data.get('author')[0].get('name')
+        author= script_data.get('author')
+        author_name = ''
+        if len(author) != 0:
+            author_name= author[0].get('name')
         thumbnail_url = script_data.get('thumbnailUrl')
         category= script_data.get('articleSection')
 
@@ -291,9 +295,9 @@ def scrape_from_cnbc_website(url):
                 remove_empty_tags(element_with_tag)
                 remove_whitespace(element_with_tag)
 
-        news_content = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != '' and 'CNBC PRO' not in paragraph.get_text(strip=True).strip()])
+        news_content_tag = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != '' and 'CNBC PRO' not in paragraph.get_text(strip=True).strip()])
 
-        print('Content with tag:', news_content)
+        print('Content with tag:', news_content_tag)
         
         # Remove all tags from the soup
         news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != '' and 'CNBC PRO' not in paragraph.get_text(strip=True).strip()])
@@ -303,13 +307,15 @@ def scrape_from_cnbc_website(url):
         
         news.append(News(
             headline=headline,
-            content=news_content,
-            link=linked_page,
-            image_url=thumbnail_url,
-            published_date=date_published,
-            source='cnbc',
             slug=slugify(headline),
-            category=category
+            content=news_content,
+            content_html=html.escape(news_content_tag),
+            source='cnbc',
+            source_url=linked_page,
+            image_url=thumbnail_url,
+            category=category,
+            author=author_name,
+            published_date=date_published,
         ))
 
     return news
@@ -360,10 +366,16 @@ def scrape_from_cnn_website(url):
         script_data = json.loads(script_content)
 
         headline = script_data.get('headline')
-        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%fZ') 
-        author_name = script_data.get('author')[0].get('name')
+        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%fz') 
+        author= script_data.get('author')
+        author_name = ''
+        if len(author) != 0:
+            author_name = author[0].get('name') 
+            
         thumbnail_url = script_data.get('thumbnailUrl')
-        category= script_data.get('articleSection')[0]
+        category= script_data.get('articleSection')
+        if len(category) != 0:
+            category = category[0]
 
         print('Headline: ', headline)
         print("Date Published: ", date_published)
@@ -383,9 +395,9 @@ def scrape_from_cnn_website(url):
                 remove_empty_tags(element_with_tag)
                 remove_whitespace(element_with_tag)
 
-        news_content = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
+        news_content_tag = '\n '.join([str(paragraph) for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
 
-        print('Content with tag:', news_content)
+        print('Content with tag:', news_content_tag)
         
         # Remove all tags from the soup
         news_content = '\n'.join([paragraph.get_text(strip=True,separator=' ') for paragraph in elements_with_tags if paragraph.get_text(strip=True).strip() != ''])
@@ -395,13 +407,15 @@ def scrape_from_cnn_website(url):
 
         news.append(News(
             headline=headline,
-            content=news_content,
-            link=linked_page,
-            image_url=thumbnail_url,
-            published_date=date_published,
-            source='cnn',
             slug=slugify(headline),
-            category=category
+            content=news_content,
+            content_html=html.escape(news_content_tag),
+            source='cnn',
+            source_url=linked_page,
+            image_url=thumbnail_url,
+            category=category,
+            author=author_name,
+            published_date=date_published,
         ))
 
     return news
@@ -412,8 +426,9 @@ def store_news_in_chroma(news: List[News]):
     print("Connecting to ChromaDB...")
     CHROMA_HOST = os.getenv('CHROMA_HOST')
     CHROMA_PORT = os.getenv('CHROMA_PORT')
+    ALLOW_RESET  = os.getenv('ALLOW_RESET')
     chroma_client = chromadb.HttpClient(
-        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=True, anonymized_telemetry=False))
+        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False))
     
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
     open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
@@ -476,10 +491,10 @@ def store_news_in_postgres(news: List[News]):
         # Remove news with existing slugs
         news = [news_obj for news_obj in news if news_obj.slug not in existing_slugs]
 
-        insert_query = """INSERT INTO news (headline, content, scraped_from, thumbnail_url, source, category_name, slug, published_date) 
-                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"""
+        insert_query = """INSERT INTO news (headline, slug, content, content_html, source, source_url, thumbnail_url, author_name, category_name,  published_date) 
+                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         
-        records_to_insert = [(news_obj.headline, news_obj.content, news_obj.link, news_obj.image_url, news_obj.source, news_obj.category, news_obj.slug, news_obj.published_date) for news_obj in news]
+        records_to_insert = [(news_obj.headline, news_obj.slug, news_obj.content, news_obj.content_html, news_obj.source, news_obj.source_url, news_obj.image_url, news_obj.author, news_obj.category, news_obj.published_date.strftime("%Y-%m-%d %H:%M:%S")) for news_obj in news]
 
         cursor.executemany(insert_query, records_to_insert)
         connection.commit()
@@ -499,7 +514,7 @@ def scrape_website():
     url_investing_website = 'https://www.investing.com/news/economy'
     newsInvesting = scrape_from_investing_website(url_investing_website)
 
-    url_cnbc_website = 'https://www.cnbc.com/economy/'
+    url_cnbc_website = 'https://www.cnbc.com/economy'
     newsCnbc = scrape_from_cnbc_website(url_cnbc_website)
 
     url_cnn_website = 'https://edition.cnn.com/business/economy'
@@ -509,28 +524,9 @@ def scrape_website():
     store_news_in_chroma(all_news) 
     store_news_in_postgres(all_news)
 
-def check_chromadb(reset=False):
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
-        api_key=OPENAI_API_KEY,
-        model_name="text-embedding-3-small"
-    )
-    CHROMA_HOST = os.getenv('CHROMA_HOST')
-    CHROMA_PORT = os.getenv('CHROMA_PORT')
-    chroma_client = chromadb.HttpClient(
-        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=True, anonymized_telemetry=False))
-    
-    if reset:
-        chroma_client.reset()
-
-    collection = chroma_client.get_or_create_collection(name="news_collection", embedding_function=open_ai_embedding)
-    print('collection peek: ',collection.peek()) # returns a list of the first 10 items in the collection
-    print('collection count: ',collection.count())
-
 def main():
     load_dotenv()
     scrape_website()
-    # check_chromadb(True)
 
 if __name__=="__main__": 
     main() 
