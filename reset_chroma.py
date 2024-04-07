@@ -6,11 +6,13 @@ import chromadb
 
 def get_chroma_collection(chroma_client):
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    CHROMA_OPENAI_MODEL = os.getenv('CHROMA_OPENAI_MODEL')
     open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
       api_key=OPENAI_API_KEY,
-      model_name="text-embedding-3-small"
+      model_name=CHROMA_OPENAI_MODEL
     )
-    collection = chroma_client.get_or_create_collection(name="news_collection", embedding_function=open_ai_embedding)
+    CHROMA_COLLECTION = os.getenv('CHROMA_COLLECTION')
+    collection = chroma_client.get_or_create_collection(name=CHROMA_COLLECTION, embedding_function=open_ai_embedding)
     print('collection peek: ',collection.peek()) # returns a list of the first 10 items in the collection
     print('collection count: ',collection.count())
 
@@ -28,7 +30,7 @@ def reset_chroma(reset=False):
 
 def main():
     load_dotenv()
-    chroma_client = reset_chroma(False)
+    chroma_client = reset_chroma(True)
     get_chroma_collection(chroma_client)
 
 if __name__=="__main__": 

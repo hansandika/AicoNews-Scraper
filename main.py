@@ -195,10 +195,10 @@ def scrape_from_investing_website(url):
             slug=slugify(headline),
             content=news_content,
             content_html=html.escape(news_content_tag),
-            source='investing',
+            source='Investing',
             source_url=linked_page,
             image_url=thumbnail_url,
-            category=category,
+            category=category.capitalize(),
             author=author_name,
             published_date=date_published
         ))
@@ -310,10 +310,10 @@ def scrape_from_cnbc_website(url):
             slug=slugify(headline),
             content=news_content,
             content_html=html.escape(news_content_tag),
-            source='cnbc',
+            source='CNBC',
             source_url=linked_page,
             image_url=thumbnail_url,
-            category=category,
+            category=category.capitalize(),
             author=author_name,
             published_date=date_published,
         ))
@@ -410,10 +410,10 @@ def scrape_from_cnn_website(url):
             slug=slugify(headline),
             content=news_content,
             content_html=html.escape(news_content_tag),
-            source='cnn',
+            source='CNN',
             source_url=linked_page,
             image_url=thumbnail_url,
-            category=category,
+            category=category.capitalize(),
             author=author_name,
             published_date=date_published,
         ))
@@ -431,12 +431,14 @@ def store_news_in_chroma(news: List[News]):
         host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False))
     
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    CHROMA_OPENAI_MODEL = os.getenv('CHROMA_OPENAI_MODEL')
     open_ai_embedding = embedding_functions.OpenAIEmbeddingFunction(
         api_key=OPENAI_API_KEY,
-        model_name="text-embedding-3-small"
+        model_name=CHROMA_OPENAI_MODEL
     )
 
-    collection = chroma_client.get_or_create_collection(name="news_collection", embedding_function=open_ai_embedding)
+    CHROMA_COLLECTION = os.getenv('CHROMA_COLLECTION')
+    collection = chroma_client.get_or_create_collection(name=CHROMA_COLLECTION, embedding_function=open_ai_embedding)
 
     # split it into chunks
     text_splitter = CharacterTextSplitter(
