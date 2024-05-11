@@ -1,3 +1,4 @@
+import schedule
 from dotenv import load_dotenv
 import json
 from typing import List
@@ -424,11 +425,24 @@ def store_news_in_chroma(news: List[News]):
     startTime = time.time()
     global chroma_client
     print("Connecting to ChromaDB...")
-    CHROMA_HOST = os.getenv('CHROMA_HOST')
-    CHROMA_PORT = os.getenv('CHROMA_PORT')
-    ALLOW_RESET  = os.getenv('ALLOW_RESET')
+
+    ENVIRONMENT = os.getenv('ENVIRONMENT')
+
+    CHROMA_HOST = os.getenv('CHROMA_HOST_LOCAL') if ENVIRONMENT == 'local' else os.getenv('CHROMA_HOST_PROD')
+
+    CHROMA_PORT = os.getenv('CHROMA_PORT_LOCAL') if ENVIRONMENT == 'local' else os.getenv('CHROMA_PORT_PROD')
+
+    ALLOW_RESET = os.getenv('ALLOW_RESET')
+
+    SSL = False if ENVIRONMENT == 'local' else True
+    
     chroma_client = chromadb.HttpClient(
-        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False))
+        host=CHROMA_HOST,
+        port=int(CHROMA_PORT), 
+        settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False),
+        ssl=SSL,
+        headers={'authorization': 'PASS'}
+    )
     
     OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
     CHROMA_OPENAI_MODEL = os.getenv('CHROMA_OPENAI_MODEL')
@@ -476,12 +490,13 @@ def store_news_in_postgres(news: List[News]):
     try:
         print("Connecting to PostgreSQL...")
         startTime = time.time()
+        ENVIRONMENT = os.getenv('ENVIRONMENT')
         connection = psycopg2.connect(
             user=os.getenv('DB_USERNAME'),
             password=os.getenv('DB_PASSWORD'),
             host=os.getenv('DB_HOST'),
             port=os.getenv('DB_PORT'),
-            database=os.getenv('DB_NAME')
+            database=os.getenv('DB_NAME') if ENVIRONMENT == 'local' else os.getenv('DB_NAME_PROD')
         )
         
         cursor = connection.cursor()
@@ -530,6 +545,10 @@ def main():
     load_dotenv()
     scrape_website()
 
+schedule.every(10).seconds.do(main)
+
 if __name__=="__main__": 
-    main() 
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
     

@@ -17,11 +17,23 @@ def get_chroma_collection(chroma_client):
     print('collection count: ',collection.count())
 
 def reset_chroma(reset=False):
-    CHROMA_HOST = os.getenv('CHROMA_HOST')
-    CHROMA_PORT = os.getenv('CHROMA_PORT')
+    ENVIRONMENT = os.getenv('ENVIRONMENT')
+
+    CHROMA_HOST = os.getenv('CHROMA_HOST_LOCAL') if ENVIRONMENT == 'local' else os.getenv('CHROMA_HOST_PROD')
+
+    CHROMA_PORT = os.getenv('CHROMA_PORT_LOCAL') if ENVIRONMENT == 'local' else os.getenv('CHROMA_PORT_PROD')
+
     ALLOW_RESET  = os.getenv('ALLOW_RESET')
+
+    SSL = False if ENVIRONMENT == 'local' else True
+
     chroma_client = chromadb.HttpClient(
-        host=CHROMA_HOST, port=int(CHROMA_PORT), settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False))
+        host=CHROMA_HOST,
+        port=int(CHROMA_PORT), 
+        settings=Settings(allow_reset=bool(ALLOW_RESET), anonymized_telemetry=False),
+        ssl=SSL,
+        headers={'authorization': 'PASS'}
+    )
     
     if reset:
         chroma_client.reset()
@@ -30,7 +42,7 @@ def reset_chroma(reset=False):
 
 def main():
     load_dotenv()
-    chroma_client = reset_chroma(True)
+    chroma_client = reset_chroma(False)
     get_chroma_collection(chroma_client)
 
 if __name__=="__main__": 
