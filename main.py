@@ -545,7 +545,7 @@ def main():
     load_dotenv()
     scrape_website()
 
-schedule.every(60).seconds.do(main)
+schedule.every().monday.at("11:00").do(main)
 
 if __name__=="__main__": 
     while True:
