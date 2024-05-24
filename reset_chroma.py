@@ -46,5 +46,4 @@ def main():
     get_chroma_collection(chroma_client)
 
 if __name__=="__main__": 
-    main() 
-    
+    main()

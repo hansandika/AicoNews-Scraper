@@ -1,4 +1,3 @@
-import schedule
 from dotenv import load_dotenv
 import json
 from typing import List
@@ -545,10 +544,6 @@ def main():
     load_dotenv()
     scrape_website()
 
-schedule.every().monday.at("11:00").do(main)
-
 if __name__=="__main__": 
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    main()
     
