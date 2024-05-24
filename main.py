@@ -139,7 +139,12 @@ def scrape_from_investing_website(url):
         script_data = json.loads(script_content)
 
         headline = script_data.get('headline')
-        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%f%z') 
+        date_published_str = script_data.get('datePublished')
+        if date_published_str == None:
+            print('Date Published Not Found')
+            continue
+        
+        date_published = datetime.strptime(date_published_str, '%Y-%m-%dT%H:%M:%S.%f%z') 
         
         author_name = script_data.get('author').get('name') 
         thumbnail_url = script_data.get('image').get('url')
@@ -252,7 +257,13 @@ def scrape_from_cnbc_website(url):
         script_data = json.loads(script_content)
 
         headline = script_data.get('headline')
-        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S%z') 
+        date_published_str = script_data.get('datePublished') 
+        if date_published_str == None:
+            print('Date Published Not Found')
+            continue
+        
+        date_published = datetime.strptime(date_published_str,'%Y-%m-%dT%H:%M:%S%z')
+
         author= script_data.get('author')
         author_name = ''
         if len(author) != 0:
@@ -366,8 +377,14 @@ def scrape_from_cnn_website(url):
         script_data = json.loads(script_content)
 
         headline = script_data.get('headline')
-        date_published = datetime.strptime(script_data.get('datePublished'), '%Y-%m-%dT%H:%M:%S.%fz') 
-        author= script_data.get('author')
+        date_published_str = script_data.get('datePublished')
+        if date_published_str == None:
+            print('Date Published Not Found')
+            continue
+        
+        date_published = datetime.strptime(date_published_str,'%Y-%m-%dT%H:%M:%S.%fz')
+
+        author = script_data.get('author')
         author_name = ''
         if len(author) != 0:
             author_name = author[0].get('name') 
