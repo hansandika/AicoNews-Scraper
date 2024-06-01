@@ -104,7 +104,7 @@ def scrape_from_investing_website(url):
     if soup == None:
         return news
 
-    links = soup.find_all('a', href=lambda href: href and href.startswith('/news/economy/') and '#' not in href)
+    links = soup.find_all('a', attrs={'data-test': 'article-title-link'})
 
     if not links:
         return news
