@@ -399,7 +399,7 @@ def scrape_from_cnn_website(url):
         print("Author Name: ", author_name)
         print("Thumbnail URL: ", thumbnail_url)
 
-        elements_with_tags = linked_page_soup.find_all('p', class_='paragraph inline-placeholder')
+        elements_with_tags = linked_page_soup.find_all('p', class_='paragraph')
 
         if not elements_with_tags:
             print("Article content Not Found")
