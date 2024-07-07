@@ -95,7 +95,66 @@ def request_page(url):
         print(f"Failed to retrieve the page. Status code: {response.status_code}")
         return None
 
-def scrape_from_investing_website(url):
+def get_existing_slugs_from_postgres():
+    try:
+        print("Connecting to PostgreSQL to retrieve existing slugs...")
+        connection = psycopg2.connect(
+            user=os.getenv('DB_USERNAME'),
+            password=os.getenv('DB_PASSWORD'),
+            host=os.getenv('DB_HOST'),
+            port=os.getenv('DB_PORT'),
+            database=os.getenv('DB_NAME') if os.getenv('ENVIRONMENT') == 'local' else os.getenv('DB_NAME_PROD')
+        )
+        
+        cursor = connection.cursor()
+        cursor.execute("SELECT slug FROM news")
+        existing_slugs = {row[0] for row in cursor.fetchall()}
+        return existing_slugs
+
+    except (Exception, Error) as error:
+        print("Error while retrieving data from PostgreSQL:", error)
+        return set()
+
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+
+def store_news_in_postgres(news: List[News]):
+    try:
+        print("Connecting to PostgreSQL...")
+        startTime = time.time()
+        connection = psycopg2.connect(
+            user=os.getenv('DB_USERNAME'),
+            password=os.getenv('DB_PASSWORD'),
+            host=os.getenv('DB_HOST'),
+            port=os.getenv('DB_PORT'),
+            database=os.getenv('DB_NAME') if os.getenv('ENVIRONMENT') == 'local' else os.getenv('DB_NAME_PROD')
+        )
+        
+        cursor = connection.cursor()
+
+        insert_query = """INSERT INTO news (headline, slug, content, content_html, source, source_url, thumbnail_url, author_name, category_name,  published_date) 
+                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
+        
+        records_to_insert = [(news_obj.headline, news_obj.slug, news_obj.content, news_obj.content_html, news_obj.source, news_obj.source_url, news_obj.image_url, news_obj.author, news_obj.category, news_obj.published_date.strftime("%Y-%m-%d %H:%M:%S")) for news_obj in news]
+
+        cursor.executemany(insert_query, records_to_insert)
+        connection.commit()
+        print("Records inserted successfully into news table")
+
+        endTime = time.time()
+        print(f"Time taken to insert records: {endTime - startTime} seconds")
+
+    except (Exception, Error) as error:
+        print("Error while inserting data into PostgreSQL:", error)
+
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
+
+def scrape_from_investing_website(url, existing_urls):
     soup = request_page(url)
 
     news: List[News] = list()
@@ -108,12 +167,13 @@ def scrape_from_investing_website(url):
 
     if not links:
         return news
-    
+        
     for link in links:
         if 'href' in link.attrs and len(unique_links) < 5:
             href_value = link['href']
             full_link = urljoin(url, href_value)  # Convert relative link to absolute link
-            unique_links.add(full_link)
+            if full_link not in existing_urls:
+                unique_links.add(full_link)
 
     # Scraping content of each linked page
     for linked_page in unique_links:
@@ -210,7 +270,7 @@ def scrape_from_investing_website(url):
 
     return news
 
-def scrape_from_cnbc_website(url):
+def scrape_from_cnbc_website(url, existing_urls):
     soup = request_page(url)
 
     news: List[News] = list()
@@ -232,7 +292,8 @@ def scrape_from_cnbc_website(url):
         if 'href' in link.attrs and len(unique_links) < 5:
             href_value = link['href']
             full_link = urljoin(url, href_value)  # Convert relative link to absolute link
-            unique_links.add(full_link)
+            if full_link not in existing_urls:
+                unique_links.add(full_link)
 
     # Scraping content of each linked page
     for linked_page in unique_links:
@@ -331,7 +392,7 @@ def scrape_from_cnbc_website(url):
 
     return news
 
-def scrape_from_cnn_website(url):
+def scrape_from_cnn_website(url, existing_urls):
     soup = request_page(url)
 
     news: List[News] = list()
@@ -352,7 +413,8 @@ def scrape_from_cnn_website(url):
     for link in links:
         if len(unique_links) < 5:
             full_link = urljoin('https://edition.cnn.com', link)  # Convert relative link to absolute link
-            unique_links.add(full_link)
+            if full_link not in existing_urls:
+                unique_links.add(full_link)
 
     # Scraping content of each linked page
     for linked_page in unique_links:
@@ -375,6 +437,9 @@ def scrape_from_cnn_website(url):
 
         # Parse the script content
         script_data = json.loads(script_content)
+
+        if isinstance(script_data, list):
+            script_data = script_data[0] if script_data else {}
 
         headline = script_data.get('headline')
         date_published_str = script_data.get('datePublished')
@@ -501,57 +566,17 @@ def store_news_in_chroma(news: List[News]):
     endTime = time.time()
     print(f"Time taken to insert records: {endTime - startTime} seconds")
 
-
-def store_news_in_postgres(news: List[News]):
-    try:
-        print("Connecting to PostgreSQL...")
-        startTime = time.time()
-        ENVIRONMENT = os.getenv('ENVIRONMENT')
-        connection = psycopg2.connect(
-            user=os.getenv('DB_USERNAME'),
-            password=os.getenv('DB_PASSWORD'),
-            host=os.getenv('DB_HOST'),
-            port=os.getenv('DB_PORT'),
-            database=os.getenv('DB_NAME') if ENVIRONMENT == 'local' else os.getenv('DB_NAME_PROD')
-        )
-        
-        cursor = connection.cursor()
-
-        # Retrieve all existing slugs from the database
-        cursor.execute("SELECT slug FROM news")
-        existing_slugs = {row[0] for row in cursor.fetchall()}
-
-        # Remove news with existing slugs
-        news = [news_obj for news_obj in news if news_obj.slug not in existing_slugs]
-
-        insert_query = """INSERT INTO news (headline, slug, content, content_html, source, source_url, thumbnail_url, author_name, category_name,  published_date) 
-                          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
-        
-        records_to_insert = [(news_obj.headline, news_obj.slug, news_obj.content, news_obj.content_html, news_obj.source, news_obj.source_url, news_obj.image_url, news_obj.author, news_obj.category, news_obj.published_date.strftime("%Y-%m-%d %H:%M:%S")) for news_obj in news]
-
-        cursor.executemany(insert_query, records_to_insert)
-        connection.commit()
-        print("Records inserted successfully into news table")
-
-        endTime = time.time()
-        print(f"Time taken to insert records: {endTime - startTime} seconds")
-
-    except (Exception, Error) as error:
-        print("Error while inserting data into PostgreSQL:", error)
-
-    finally:
-        if connection:
-            cursor.close()
-
 def scrape_website():
+    existing_slugs = get_existing_slugs_from_postgres()
+
     url_investing_website = 'https://www.investing.com/news/economy'
-    newsInvesting = scrape_from_investing_website(url_investing_website)
+    newsInvesting = scrape_from_investing_website(url_investing_website, existing_slugs)
 
     url_cnbc_website = 'https://www.cnbc.com/economy'
-    newsCnbc = scrape_from_cnbc_website(url_cnbc_website)
+    newsCnbc = scrape_from_cnbc_website(url_cnbc_website, existing_slugs)
 
     url_cnn_website = 'https://edition.cnn.com/business/economy'
-    newsCnn = scrape_from_cnn_website(url_cnn_website)
+    newsCnn = scrape_from_cnn_website(url_cnn_website, existing_slugs)
 
     all_news = newsInvesting + newsCnbc + newsCnn
     store_news_in_chroma(all_news) 
