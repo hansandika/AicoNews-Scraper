@@ -134,6 +134,10 @@ def store_news_in_postgres(news: List[News]):
         
         cursor = connection.cursor()
 
+        existing_slugs = get_existing_slugs_from_postgres()
+
+        news = [news_obj for news_obj in news if news_obj.slug not in existing_slugs]
+
         insert_query = """INSERT INTO news (headline, slug, content, content_html, source, source_url, thumbnail_url, author_name, category_name,  published_date) 
                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"""
         
